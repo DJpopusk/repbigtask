@@ -1,326 +1,258 @@
 #include "lodepng.h"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <math.h>
+#include <stdbool.h>
 #include <time.h>
-
-#define radius 1
-#define epsilon 50
 
 typedef struct Node {
     unsigned char r, g, b, a;
-    struct Node* up, * down, * left, * right, * parent;
+    struct Node *up, *down, *left, *right;
+    struct Node *parent;
     int rank;
 } Node;
 
-void gaussian_filter(unsigned char* image, unsigned w, unsigned h) {
-    int x, y, i, j;
-    float r, g, b;
-    float kernel[3][3] = {
-        {1.0 / 16, 1.0 / 8, 1.0 / 16},
-        {1.0 / 8, 1.0 / 4, 1.0 / 8},
-        {1.0 / 16, 1.0 / 8, 1.0 / 16}
-    };
-    unsigned char* tempImage = (unsigned char*)malloc(w * h * 4);
-
-    for (y = 1; y < h - 1; y++) {
-        for (x = 1; x < w - 1; x++) {
-            r = g = b = 0;
-            for (j = -radius; j <= radius; j++) {
-                for (i = -radius; i <= radius; i++) {
-                    int pixelPos = 4 * ((y + j) * w + (x + i));
-                    r += image[pixelPos] * kernel[j + radius][i + radius];
-                    g += image[pixelPos + 1] * kernel[j + radius][i + radius];
-                    b += image[pixelPos + 2] * kernel[j + radius][i + radius];
-                }
-            }
-            tempImage[4 * (y * w + x)] = (unsigned char)r;
-            tempImage[4 * (y * w + x) + 1] = (unsigned char)g;
-            tempImage[4 * (y * w + x) + 2] = (unsigned char)b;
-            tempImage[4 * (y * w + x) + 3] = 255;
-        }
+Node* find(Node* x) {
+    if (x->parent != x) {
+        x->parent = find(x->parent);
     }
-
-    for (y = 0; y < h; y++) {
-        for (x = 0; x < w; x++) {
-            image[4 * (y * w + x)] = tempImage[4 * (y * w + x)];
-            image[4 * (y * w + x) + 1] = tempImage[4 * (y * w + x) + 1];
-            image[4 * (y * w + x) + 2] = tempImage[4 * (y * w + x) + 2];
-        }
-    }
-
-    free(tempImage);
+    return x->parent;
 }
-
-void sobel_filter(unsigned char* image, unsigned w, unsigned h) {
-    int x, y;
-    int Gx[3][3] = {
-        {-1, 0, 1},
-        {-2, 0, 2},
-        {-1, 0, 1}
-    };
-    int Gy[3][3] = {
+void blur_filter(Node* nodes, int width, int height) {
+    int kernel[3][3] = {
         {1, 2, 1},
-        {0, 0, 0},
-        {-1, -2, -1}
+        {2, 4, 2},
+        {1, 2, 1}
     };
-    unsigned char* tempImage = (unsigned char*)malloc(w * h * 4);
+    int kernel_sum = 16;
 
-    for (y = 1; y < h - 1; y++) {
-        for (x = 1; x < w - 1; x++) {
-            float sumX = 0.0;
-            float sumY = 0.0;
-            for (int i = -1; i <= 1; i++) {
-                for (int j = -1; j <= 1; j++) {
-                    unsigned char r = image[4 * ((y + i) * w + (x + j))];
-                    sumX += Gx[i + 1][j + 1] * r;
-                    sumY += Gy[i + 1][j + 1] * r;
+    Node* new_nodes = malloc(width * height * sizeof(Node));
+    if (!new_nodes) return;
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int r = 0, g = 0, b = 0;
+            for (int ky = -1; ky <= 1; ky++) {
+                for (int kx = -1; kx <= 1; kx++) {
+                    int ny = y + ky;
+                    int nx = x + kx;
+                    if (ny >= 0 && ny < height && nx >= 0 && nx < width) {
+                        Node* neighbor = &nodes[ny * width + nx];
+                        int kvalue = kernel[ky + 1][kx + 1];
+                        r += neighbor->r * kvalue;
+                        g += neighbor->g * kvalue;
+                        b += neighbor->b * kvalue;
+                    }
                 }
             }
-            int sum = (int)sqrt(sumX * sumX + sumY * sumY);
-            if (sum > 255) sum = 255;
-            if (sum < 0) sum = 0;
+            Node* new_node = &new_nodes[y * width + x];
+            new_node->r = r / kernel_sum;
+            new_node->g = g / kernel_sum;
+            new_node->b = b / kernel_sum;
+            new_node->a = 255;
 
-            tempImage[4 * (y * w + x)] = sum;
-            tempImage[4 * (y * w + x) + 1] = sum;
-            tempImage[4 * (y * w + x) + 2] = sum;
-            tempImage[4 * (y * w + x) + 3] = 255;
+            new_node->up = (y > 0) ? &new_nodes[(y - 1) * width + x] : NULL;
+            new_node->down = (y < height - 1) ? &new_nodes[(y + 1) * width + x] : NULL;
+            new_node->left = (x > 0) ? &new_nodes[y * width + (x - 1)] : NULL;
+            new_node->right = (x < width - 1) ? &new_nodes[y * width + (x + 1)] : NULL;
+            new_node->parent = new_node;
+            new_node->rank = 0;
         }
     }
 
-    for (y = 0; y < h; y++) {
-        for (x = 0; x < w; x++) {
-            image[4 * (y * w + x)] = tempImage[4 * (y * w + x)];
-            image[4 * (y * w + x) + 1] = tempImage[4 * (y * w + x) + 1];
-            image[4 * (y * w + x) + 2] = tempImage[4 * (y * w + x) + 2];
-        }
-    }
-
-    free(tempImage);
+    memcpy(nodes, new_nodes, width * height * sizeof(Node));
+    free(new_nodes);
 }
 
-void median_filter(unsigned char* image, unsigned w, unsigned h) {
-    int windowSize = 3;
-    int edge = windowSize / 2;
-    unsigned char* tempImage = (unsigned char*)malloc(w * h * 4);
+int compare(const void *a, const void *b) {
+    return (*(unsigned char*)a - *(unsigned char*)b);
+}
 
-    for (int y = edge; y < h - edge; y++) {
-        for (int x = edge; x < w - edge; x++) {
-            unsigned char windowR[windowSize * windowSize];
-            unsigned char windowG[windowSize * windowSize];
-            unsigned char windowB[windowSize * windowSize];
+void median_filter(Node* nodes, int width, int height) {
+    Node* new_nodes = malloc(width * height * sizeof(Node));
+    if (!new_nodes) return;
 
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            unsigned char r_values[9], g_values[9], b_values[9];
             int k = 0;
-            for (int i = -edge; i <= edge; i++) {
-                for (int j = -edge; j <= edge; j++) {
-                    int pixelPos = 4 * ((y + i) * w + (x + j));
-                    windowR[k] = image[pixelPos];
-                    windowG[k] = image[pixelPos + 1];
-                    windowB[k] = image[pixelPos + 2];
-                    k++;
-                }
-            }
-
-            // Сортируем массивы
-            for (int m = 0; m < windowSize * windowSize - 1; m++) {
-                for (int n = m + 1; n < windowSize * windowSize; n++) {
-                    if (windowR[m] > windowR[n]) {
-                        unsigned char temp = windowR[m];
-                        windowR[m] = windowR[n];
-                        windowR[n] = temp;
-                    }
-                    if (windowG[m] > windowG[n]) {
-                        unsigned char temp = windowG[m];
-                        windowG[m] = windowG[n];
-                        windowG[n] = temp;
-                    }
-                    if (windowB[m] > windowB[n]) {
-                        unsigned char temp = windowB[m];
-                        windowB[m] = windowB[n];
-                        windowB[n] = temp;
+            for (int ky = -1; ky <= 1; ky++) {
+                for (int kx = -1; kx <= 1; kx++) {
+                    int ny = y + ky;
+                    int nx = x + kx;
+                    if (ny >= 0 && ny < height && nx >= 0 && nx < width) {
+                        Node* neighbor = &nodes[ny * width + nx];
+                        r_values[k] = neighbor->r;
+                        g_values[k] = neighbor->g;
+                        b_values[k] = neighbor->b;
+                        k++;
                     }
                 }
             }
+            qsort(r_values, k, sizeof(unsigned char), compare);
+            qsort(g_values, k, sizeof(unsigned char), compare);
+            qsort(b_values, k, sizeof(unsigned char), compare);
 
-            tempImage[4 * (y * w + x)] = windowR[(windowSize * windowSize) / 2];
-            tempImage[4 * (y * w + x) + 1] = windowG[(windowSize * windowSize) / 2];
-            tempImage[4 * (y * w + x) + 2] = windowB[(windowSize * windowSize) / 2];
-            tempImage[4 * (y * w + x) + 3] = 255;
+            Node* new_node = &new_nodes[y * width + x];
+            new_node->r = r_values[k / 2];
+            new_node->g = g_values[k / 2];
+            new_node->b = b_values[k / 2];
+            new_node->a = 255;
+
+            new_node->up = (y > 0) ? &new_nodes[(y - 1) * width + x] : NULL;
+            new_node->down = (y < height - 1) ? &new_nodes[(y + 1) * width + x] : NULL;
+            new_node->left = (x > 0) ? &new_nodes[y * width + (x - 1)] : NULL;
+            new_node->right = (x < width - 1) ? &new_nodes[y * width + (x + 1)] : NULL;
+            new_node->parent = new_node;
+            new_node->rank = 0;
         }
     }
 
-    for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-            image[4 * (y * w + x)] = tempImage[4 * (y * w + x)];
-            image[4 * (y * w + x) + 1] = tempImage[4 * (y * w + x) + 1];
-            image[4 * (y * w + x) + 2] = tempImage[4 * (y * w + x) + 2];
-        }
+    memcpy(nodes, new_nodes, width * height * sizeof(Node));
+    free(new_nodes);
+}
+
+void union_set(Node* x, Node* y, double epsilon) {
+    if (x->r < 60) {
+        return;
     }
+    Node* px = find(x);
+    Node* py = find(y);
 
-    free(tempImage);
-}
-
-int color_diff(Node* a, Node* b) {
-    return sqrt(pow((a->r - b->r), 2) + pow((a->g - b->g), 2) + pow((a->b - b->b), 2));
-}
-
-Node* find(Node* node) {
-    if (node->parent != node) {
-        node->parent = find(node->parent);
-    }
-    return node->parent;
-}
-
-void union_sets(Node* a, Node* b) {
-    Node* rootA = find(a);
-    Node* rootB = find(b);
-
-    if (rootA != rootB) {
-        if (rootA->rank > rootB->rank) {
-            rootB->parent = rootA;
-        } else if (rootA->rank < rootB->rank) {
-            rootA->parent = rootB;
+    double color_difference = sqrt(pow(x->r - y->r, 2) + pow(x->g - y->g, 2) + pow(x->b - y->b, 2));
+    if (px != py && color_difference < epsilon) {
+        if (px->rank > py->rank) {
+            py->parent = px;
         } else {
-            rootB->parent = rootA;
-            rootA->rank++;
+            px->parent = py;
+            if (px->rank == py->rank) {
+                py->rank++;
+            }
         }
     }
 }
 
-Node* nodes;
+Node* create_graph(const char *filename, int *width, int *height) {
+    unsigned char *image = NULL;
+    int error = lodepng_decode32_file(&image, width, height, filename);
+    if (error) {
+        printf("error %u: %s\n", error, lodepng_error_text(error));
+        return NULL;
+    }
+  for (int i = 0; i < *height * *width * 4; i += 4) {
+    char gray = (image[i + 0] +image[i + 1] + image[i + 2]) / 3;
+    image[i + 0] = gray;
+    image[i + 1] = gray;
+    image[i + 2] = gray;
+    image[i + 3] = image[i + 3];
+  }
 
-void init_nodes(unsigned char* image, unsigned w, unsigned h) {
-    nodes = (Node*)malloc(w * h * sizeof(Node));
+    Node* nodes = malloc(*width * *height * sizeof(Node));
     if (!nodes) {
-        fprintf(stderr, "Malloc failed\n");
-        exit(1);
+        free(image);
+        return NULL;
+    }
+    blur_filter(nodes, width, height);
+    median_filter(nodes, width, height);
+    for (unsigned y = 0; y < *height; ++y) {
+        for (unsigned x = 0; x < *width; ++x) {
+            Node* node = &nodes[y * *width + x];
+            unsigned char* pixel = &image[(y * *width + x) * 4];
+            node->r = pixel[0];
+            node->g = pixel[1];
+            node->b = pixel[2];
+            node->a = pixel[3];
+            node->up = y > 0 ? &nodes[(y - 1) * *width + x] : NULL;
+            node->down = y < *height - 1 ? &nodes[(y + 1) * *width + x] : NULL;
+            node->left = x > 0 ? &nodes[y * *width + (x - 1)] : NULL;
+            node->right = x < *width - 1 ? &nodes[y * *width + (x + 1)] : NULL;
+            node->parent = node;
+            node->rank = 0;
+        }
     }
 
-    for (unsigned y = 0; y < h; y++) {
-        for (unsigned x = 0; x < w; x++) {
-            Node* n = &nodes[y * w + x];
-            n->r = image[4 * w * y + 4 * x + 0];
-            n->g = image[4 * w * y + 4 * x + 1];
-            n->b = image[4 * w * y + 4 * x + 2];
-            n->a = image[4 * w * y + 4 * x + 3];
-            n->up = (y == 0) ? NULL : &nodes[(y - 1) * w + x];
-            n->down = (y == h - 1) ? NULL : &nodes[(y + 1) * w + x];
-            n->left = (x == 0) ? NULL : &nodes[y * w + (x - 1)];
-            n->right = (x == w - 1) ? NULL : &nodes[y * w + (x + 1)];
-            n->parent = n;
-            n->rank = 0;
+
+    free(image);
+    return nodes;
+}
+
+void find_components(Node* nodes, int width, int height, double epsilon) {
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            Node* node = &nodes[y * width + x];
+            if (node->up) {
+                union_set(node, node->up, epsilon);
+            }
+            if (node->down) {
+                union_set(node, node->down, epsilon);
+            }
+            if (node->left) {
+                union_set(node, node->left, epsilon);
+            }
+            if (node->right) {
+                union_set(node, node->right, epsilon);
+            }
         }
     }
 }
 
-void components(unsigned w, unsigned h) {
-    for (unsigned y = 0; y < h; y++) {
-        for (unsigned x = 0; x < w; x++) {
-            Node* n = &nodes[y * w + x];
-
-            // Skip white pixels (255, 255, 255)
-            if (n->r == 0 && n->g == 0 && n->b == 0) continue;
-
-            if (n->right && color_diff(n, n->right) < epsilon) {
-                union_sets(n, n->right);
-            }
-            if (n->down && color_diff(n, n->down) < epsilon) {
-                union_sets(n, n->down);
-            }
-        }
-    }
+void free_graph(Node* nodes) {
+    free(nodes);
 }
 
-void color_components(unsigned char* image, unsigned w, unsigned h) {
+void color_components_and_count(Node* nodes, int width, int height) {
+    unsigned char* output_image = malloc(width * height * 4 * sizeof(unsigned char));
+    int* component_sizes = calloc(width * height, sizeof(int));
+    int total_components = 0;
+
     srand(time(NULL));
-
-    for (unsigned y = 0; y < h; y++) {
-        for (unsigned x = 0; x < w; x++) {
-            Node* n = &nodes[y * w + x];
-            Node* root = find(n);
-
-            // Skip black pixels (0, 0, 0)
-            if (root->r <= 60 && root->g <= 60 && root->b <= 60) continue;
-
-            // Assign random color to connected components
-            if (root->parent == root) {
-                root->r = rand() % 256;
-                root->g = rand() % 256;
-                root->b = rand() % 256;
+    for (int i = 0; i < width * height; i++) {
+        Node* p = find(&nodes[i]);
+        if (p == &nodes[i]) {
+            if (component_sizes[i] < 1) {
+                p->r = 0;
+                p->g = 0;
+                p->b = 0;
+            } else {
+                p->r = rand() % 130;
+                p->g = rand() % 190;
+                p->b = rand() % 256;
             }
-
-            image[4 * w * y + 4 * x + 0] = root->r;
-            image[4 * w * y + 4 * x + 1] = root->g;
-            image[4 * w * y + 4 * x + 2] = root->b;
-            image[4 * w * y + 4 * x + 3] = 255; // Set alpha to opaque
+            total_components++;
         }
+        output_image[4 * i + 0] = p->r;
+        output_image[4 * i + 1] = p->g;
+        output_image[4 * i + 2] = p->b;
+        output_image[4 * i + 3] = 255;
+        component_sizes[p - nodes]++;
     }
-}
 
-void count_component_sizes(unsigned w, unsigned h, int* component_sizes) {
-    for (unsigned y = 0; y < h; y++) {
-        for (unsigned x = 0; x < w; x++) {
-            Node* n = &nodes[y * w + x];
-            Node* root = find(n);
-            component_sizes[root - nodes]++;
-        }
-    }
-}
+    char *output_filename = "output2.png";
+    lodepng_encode32_file(output_filename, output_image, width, height);
 
-void remove_small_components(unsigned char* image, unsigned w, unsigned h, int* component_sizes, int min_size) {
-    for (unsigned y = 0; y < h; y++) {
-        for (unsigned x = 0; x < w; x++) {
-            Node* n = &nodes[y * w + x];
-            Node* root = find(n);
-            if (component_sizes[root - nodes] < min_size) {
-                image[4 * w * y + 4 * x + 0] = 255; 
-                image[4 * w * y + 4 * x + 1] = 255;
-                image[4 * w * y + 4 * x + 2] = 255;
-                image[4 * w * y + 4 * x + 3] = 255;
-            }
-        }
-    }
+
+    free(output_image);
+    free(component_sizes);
 }
 
 int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        printf("Please provide input PNG file\n");
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <filename>\n", argv[0]);
         return 1;
     }
 
-    unsigned error;
-    unsigned char* image;
-    unsigned width, height;
-    error = lodepng_decode32_file(&image, &width, &height, argv[1]);
-    if (error) {
-        printf("Error %u: %s\n", error, lodepng_error_text(error));
+    int width, height;
+    char *filename = argv[1];
+    Node* nodes = create_graph(filename, &width, &height);
+    if (!nodes) {
+        fprintf(stderr, "Error creating graph from file: %s\n", filename);
         return 1;
     }
 
-    gaussian_filter(image, width, height);
-    printf("Применение фильтра Собеля\n");
-    sobel_filter(image, width, height);
-    printf("Применение медианного фильтра\n");
-    median_filter(image, width, height);
+    double epsilon = 12.0;
+    find_components(nodes, width, height, epsilon);
+    color_components_and_count(nodes, width, height);
 
-    init_nodes(image, width, height);
-    components(width, height);
-
-    int* component_sizes = (int*)calloc(width * height, sizeof(int));
-    count_component_sizes(width, height, component_sizes);
-
-    remove_small_components(image, width, height, component_sizes, 50); // Минимальный размер компонента
-    color_components(image, width, height);
-    char outputFilename[] = "output.png";
-    error = lodepng_encode32_file(outputFilename, image, width, height);
-    if (error) {
-        printf("Error %u: %s\n", error, lodepng_error_text(error));
-    }
-
-    free(image);
-    free(nodes);
-    free(component_sizes);
+    free_graph(nodes);
     return 0;
 }
