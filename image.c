@@ -64,6 +64,60 @@ void blur_filter(Node* nodes, int width, int height) {
     free(new_nodes);
 }
 
+void sobel_filter(Node* nodes, unsigned w, unsigned h) {
+    int x, y;
+    int Gx[3][3] = {
+        {-1, 0, 1},
+        {-2, 0, 2},
+        {-1, 0, 1}
+    };
+    int Gy[3][3] = {
+        {1, 2, 1},
+        {0, 0, 0},
+        {-1, -2, -1}
+    };
+
+    Node* tempNodes = (Node*)malloc(w * h * sizeof(Node));
+
+    for (y = 1; y < h - 1; y++) {
+        for (x = 1; x < w - 1; x++) {
+            float sumX = 0.0;
+            float sumY = 0.0;
+            Node* current = &nodes[y * w + x];
+
+            for (int i = -1; i <= 1; i++) {
+                for (int j = -1; j <= 1; j++) {
+                    Node* neighbor = &nodes[(y + i) * w + (x + j)];
+                    unsigned char r = neighbor->r;
+                    sumX += Gx[i + 1][j + 1] * r;
+                    sumY += Gy[i + 1][j + 1] * r;
+                }
+            }
+
+            int sum = (int)sqrt(sumX * sumX + sumY * sumY);
+            if (sum > 255) sum = 255;
+            if (sum < 0) sum = 0;
+
+            tempNodes[y * w + x].r = sum;
+            tempNodes[y * w + x].g = sum;
+            tempNodes[y * w + x].b = sum;
+            tempNodes[y * w + x].a = 255;
+        }
+    }
+
+    for (y = 0; y < h; y++) {
+        for (x = 0; x < w; x++) {
+            nodes[y * w + x].r = tempNodes[y * w + x].r;
+            nodes[y * w + x].g = tempNodes[y * w + x].g;
+            nodes[y * w + x].b = tempNodes[y * w + x].b;
+            nodes[y * w + x].a = tempNodes[y * w + x].a;
+        }
+    }
+
+    free(tempNodes);
+}
+
+
 int compare(const void *a, const void *b) {
     return (*(unsigned char*)a - *(unsigned char*)b);
 }
@@ -111,6 +165,7 @@ void median_filter(Node* nodes, int width, int height) {
     memcpy(nodes, new_nodes, width * height * sizeof(Node));
     free(new_nodes);
 }
+
 
 void union_set(Node* x, Node* y, double epsilon) {
     if (x->r < 60) {
@@ -226,7 +281,7 @@ void color_components_and_count(Node* nodes, int width, int height) {
         component_sizes[p - nodes]++;
     }
 
-    char *output_filename = "output2.png";
+    char *output_filename = "output1.png";
     lodepng_encode32_file(output_filename, output_image, width, height);
 
 
@@ -251,6 +306,7 @@ int main(int argc, char* argv[]) {
     color_components_and_count(nodes, width, height);
     blur_filter(nodes, width, height);
     median_filter(nodes, width, height);
+    sobel_filter(nodes, width, height);
     free_graph(nodes);
     return 0;
 }
