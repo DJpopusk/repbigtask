@@ -152,8 +152,7 @@ Node* create_graph(const char *filename, int *width, int *height) {
         free(image);
         return NULL;
     }
-    blur_filter(nodes, width, height);
-    median_filter(nodes, width, height);
+    
     for (unsigned y = 0; y < *height; ++y) {
         for (unsigned x = 0; x < *width; ++x) {
             Node* node = &nodes[y * *width + x];
@@ -214,8 +213,8 @@ void color_components_and_count(Node* nodes, int width, int height) {
                 p->g = 0;
                 p->b = 0;
             } else {
-                p->r = rand() % 130;
-                p->g = rand() % 190;
+                p->r = rand() % 256;
+                p->g = rand() % 256;
                 p->b = rand() % 256;
             }
             total_components++;
@@ -234,7 +233,6 @@ void color_components_and_count(Node* nodes, int width, int height) {
     free(output_image);
     free(component_sizes);
 }
-
 int main(int argc, char* argv[]) {
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <filename>\n", argv[0]);
@@ -248,11 +246,11 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Error creating graph from file: %s\n", filename);
         return 1;
     }
-
-    double epsilon = 12.0;
+    double epsilon = 15.0;
     find_components(nodes, width, height, epsilon);
     color_components_and_count(nodes, width, height);
-
+    blur_filter(nodes, width, height);
+    median_filter(nodes, width, height);
     free_graph(nodes);
     return 0;
 }
